@@ -15,8 +15,8 @@ https://dashboard.alwaysai.co/docs/application_development/changing_the_engine_a
 
 def main():
     obj_detect = edgeiq.ObjectDetection(
-            "alwaysai/vehicle_license_mobilenet_ssd")
-    obj_detect.load(engine=edgeiq.Engine.DNN)
+            "alwaysai/vehicle_license_mobilenet_ssd_nano")
+    obj_detect.load(engine=edgeiq.Engine.TENSOR_RT)
 
     print("Loaded model:\n{}\n".format(obj_detect.model_id))
     print("Engine: {}".format(obj_detect.engine))
@@ -27,83 +27,73 @@ def main():
     fps = edgeiq.FPS()
 
     try:
-        video_paths = edgeiq.list_files(
-                            base_path="./video/",
-                            valid_exts=".mp4"
-                        )
-        streamer = edgeiq.Streamer().setup()
+        with edgeiq.WebcamVideoStream(cam=0) as video_stream, \
+            edgeiq.Streamer() as streamer:
 
-        for video_path in video_paths:
-            with edgeiq.FileVideoStream(video_path, play_realtime=True)\
-                    as video_stream:
+            # Allow Webcam to warm up
+            time.sleep(2.0)
+            fps.start()
 
-                try:
-                    # Allow Webcam to warm up
-                    time.sleep(2.0)
-                    fps.start()
+            # loop detection
+            while True:
+                frame = video_stream.read()
+                predictions = []
 
-                    # loop detection
-                    while video_stream.more():
-                        frame = video_stream.read()
-                        predictions = []
-
-                        results = obj_detect.detect_objects(
-                                                frame,
-                                                confidence_level=.5
-                                            )
-
-                        # Generate text to display on streamer
-                        text = ["Model: {}".format(obj_detect.model_id)]
-                        text.append(
-                                "Inference time: {:1.3f} s".format(
-                                    results.duration
+                results = obj_detect.detect_objects(
+                                        frame,
+                                        confidence_level=.5
                                     )
-                                )
-                        text.append("Objects:")
 
-                        # Update tracker results with the new predictions
-                        objects = tracker.update(results.predictions)
+                # Generate text to display on streamer
+                text = ["Model: {}".format(obj_detect.model_id)]
+                text.append(
+                        "Inference time: {:1.3f} s".format(
+                            results.duration
+                            )
+                        )
+                text.append("Objects:")
 
-                        if len(objects) == 0:
-                            text.append("no predictions")
-                        else:
-                            # Create a new prediction list
-                            for (object_id, prediction) in objects.items():
-                                text.append("{}_{}: {:2.2f}%".format(
-                                                    prediction.label,
-                                                    object_id,
-                                                    prediction.confidence * 100
-                                                )
-                                            )
-                                new_label = '{} {}'.format(
-                                                    prediction.label,
-                                                    object_id
-                                                )
-                                prediction.label = '{} {}'.format(
-                                                    new_label.split(" ")[0],
-                                                    object_id
-                                                )
-                                predictions.append(prediction)
+                # Update tracker results with the new predictions
+                objects = tracker.update(results.predictions)
 
-                        # Mark up the image and update text
-                        frame = edgeiq.markup_image(
-                                    frame, predictions,
-                                    show_labels=True,
-                                    show_confidences=False,
-                                    colors=obj_detect.colors,
-                                    line_thickness=4,
-                                    font_size=1,
-                                    font_thickness=4
-                                )
+                if len(objects) == 0:
+                    text.append("no predictions")
+                else:
+                    # Create a new prediction list
+                    for (object_id, prediction) in objects.items():
+                        text.append("{}_{}: {:2.2f}%".format(
+                                            prediction.label,
+                                            object_id,
+                                            prediction.confidence * 100
+                                        )
+                                    )
+                        new_label = '{} {}'.format(
+                                            prediction.label,
+                                            object_id
+                                        )
+                        prediction.label = '{} {}'.format(
+                                            new_label.split(" ")[0],
+                                            object_id
+                                        )
+                        predictions.append(prediction)
 
-                        streamer.send_data(frame, text)
+                # Mark up the image and update text
+                frame = edgeiq.markup_image(
+                            frame, predictions,
+                            show_labels=True,
+                            show_confidences=False,
+                            colors=obj_detect.colors,
+                            line_thickness=4,
+                            font_size=1,
+                            font_thickness=4
+                        )
 
-                        fps.update()
+                streamer.send_data(frame, text)
 
-                        if streamer.check_exit():
-                            break
-                except edgeiq.NoMoreFrames:
-                    continue
+                fps.update()
+
+                if streamer.check_exit():
+                    break
 
     finally:
         fps.stop()
